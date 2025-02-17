@@ -11,7 +11,7 @@ def hello_world():
     return "Hello, World!"
 
 
-@app.route('/fetch_places', methods=['POST'])
+@app.route('/api/fetch_places', methods=['POST'])
 def api_fetch_places():
     data = request.json
     location = data.get('location')
@@ -27,7 +27,7 @@ def api_fetch_places():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/fetch_activities', methods=['POST'])
+@app.route('/api/fetch_activities', methods=['POST'])
 def api_fetch_activities():
     data = request.json
     location = tuple(data.get('location', [40.7128, -74.0060]))  # Default: NYC
@@ -39,7 +39,7 @@ def api_fetch_activities():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/generate_plan', methods=['POST'])
+@app.route('/api/generate_plan', methods=['POST'])
 def api_generate_plan():
     data = request.json
 
