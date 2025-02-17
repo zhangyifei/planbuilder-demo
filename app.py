@@ -45,7 +45,7 @@ def api_generate_plan():
 
     try:
         plan = generate_plan(data)
-        return jsonify(plan), 200
+        return plan, 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
