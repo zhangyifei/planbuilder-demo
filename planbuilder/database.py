@@ -1,8 +1,6 @@
-import sqlite3
+import os
+from supabase import create_client, Client
 from .utils import haversine_distance
-
-# Database file path
-DB_FILE = "places.db"
 
 # Radius for fetched regions (meters)
 FETCH_RADIUS = 3000  # Adjust as needed
@@ -10,113 +8,96 @@ FETCH_RADIUS = 3000  # Adjust as needed
 # Minimum realistic travel time (in minutes)
 MIN_TRAVEL_TIME = 10  # Prevent unrealistic short travel times
 
-# ----------------------------------------------------------------
-# 2. Database Setup
-# ----------------------------------------------------------------
+# Initialize the Supabase Client using environment variables or your own config
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://YOUR_PROJECT_ID.supabase.co")
+SUPABASE_KEY = os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "YOUR_SUPABASE_ANON_OR_SERVICE_KEY")
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def initialize_database(db_path=DB_FILE):
-    """
-    Initializes the SQLite database. Creates the 'places' and 'fetched_regions' tables if they don't exist.
-    """
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    # Create 'places' table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS places (
-            place_id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            lat REAL NOT NULL,
-            lng REAL NOT NULL,
-            rating REAL,
-            price_level INTEGER,
-            category TEXT,
-            fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    # Create 'fetched_regions' table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS fetched_regions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            center_lat REAL NOT NULL,
-            center_lng REAL NOT NULL,
-            radius INTEGER NOT NULL,
-            fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    conn.commit()
-    conn.close()
 
-def save_places_to_db(places, db_path=DB_FILE):
+def initialize_database():
     """
-    Saves a list of place dictionaries to the SQLite database.
+    Verifies if the 'places' and 'fetched_regions' tables exist in Supabase
+    by calling the 'check_table_exists' RPC function.
+    Raises an exception if any table is missing.
     """
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    for place in places:
-        cursor.execute('''
-            INSERT OR REPLACE INTO places (place_id, name, lat, lng, rating, price_level, category)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            place["place_id"],
-            place["name"],
-            place["lat"],
-            place["lng"],
-            place.get("rating"),
-            place.get("price_level"),
-            place.get("category")
-        ))
-    conn.commit()
-    conn.close()
+    missing_tables = []
+    for table in ["places", "fetched_regions"]:
+        response = supabase.rpc("check_table_exists", {"tablename": table}).execute()
 
-def save_fetched_region(center_lat, center_lng, radius, db_path=DB_FILE):
-    """
-    Saves a fetched region to the 'fetched_regions' table.
-    """
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO fetched_regions (center_lat, center_lng, radius)
-        VALUES (?, ?, ?)
-    ''', (center_lat, center_lng, radius))
-    conn.commit()
-    conn.close()
+        # Correct way to access response data and errors
+        if hasattr(response, "error") and response.error:
+            raise Exception(f"Error checking table {table}: {response.error}")
 
-def is_location_fetched(center_lat, center_lng, radius, db_path=DB_FILE):
+        if hasattr(response, "data") and not response.data:
+            missing_tables.append(table)
+
+    if missing_tables:
+        raise Exception(f"Missing tables in Supabase: {', '.join(missing_tables)}")
+
+    print("✅ Database initialized successfully. All required tables exist.")
+
+
+def save_places_to_db(places):
     """
-    Checks if the current location is within any of the fetched regions.
-    Returns True if fetched, False otherwise.
+    Saves a list of place dictionaries to the 'places' table in Supabase.
+    Uses upsert behavior (i.e., it will insert or update records based on a conflict key).
     """
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute('SELECT center_lat, center_lng, radius FROM fetched_regions')
-    regions = cursor.fetchall()
-    conn.close()
+    if not places:
+        return
+
+    response = supabase.table("places").upsert(places, on_conflict="place_id").execute()
+
+    if hasattr(response, "error") and response.error:
+        raise Exception(f"Error upserting places: {response.error.message}")
+
+
+def save_fetched_region(center_lat, center_lng, radius):
+    """
+    Saves a fetched region to the 'fetched_regions' table in Supabase.
+    """
+    data = {
+        "center_lat": center_lat,
+        "center_lng": center_lng,
+        "radius": radius
+    }
+
+    response = supabase.table("fetched_regions").insert(data).execute()
+
+    if hasattr(response, "error") and response.error:
+        raise Exception(f"Error inserting fetched region: {response.error.message}")
+
+
+def is_location_fetched(center_lat, center_lng, radius):
+    """
+    Checks if the current location is within any of the fetched regions in Supabase.
+    Returns True if within the radius of any fetched region, False otherwise.
+    """
+    response = supabase.table("fetched_regions").select("*").execute()
+    
+    if hasattr(response, "error") and response.error:
+        raise Exception(f"Error fetching regions: {response.error.message}")
+
+    regions = response.data if response.data else []
+
     for region in regions:
-        region_lat, region_lng, region_radius = region
+        region_lat = region["center_lat"]
+        region_lng = region["center_lng"]
+        region_radius = region["radius"]
+
         distance = haversine_distance(center_lat, center_lng, region_lat, region_lng) * 1000  # km to meters
         if distance <= (radius + region_radius):
             return True
     return False
 
-def load_places_from_db(db_path=DB_FILE):
+
+def load_places_from_db():
     """
-    Loads all places from the SQLite database.
+    Loads all places from the 'places' table in Supabase.
     Returns a list of place dictionaries.
     """
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute('SELECT place_id, name, lat, lng, rating, price_level, category FROM places')
-    rows = cursor.fetchall()
-    conn.close()
-    places = []
-    for row in rows:
-        places.append({
-            "place_id": row[0],
-            "name": row[1],
-            "lat": row[2],
-            "lng": row[3],
-            "rating": row[4],
-            "price_level": row[5],
-            "category": row[6]
-        })
-    return places
+    response = supabase.table("places").select("place_id, name, lat, lng, rating, price_level, category").execute()
+
+    if hasattr(response, "error") and response.error:
+        raise Exception(f"Error fetching places: {response.error.message}")
+
+    return response.data if response.data else []

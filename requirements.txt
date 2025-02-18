@@ -2,3 +2,4 @@ flasgger==0.9.7.1
 Flask==3.1.0
 Flask_Cors==5.0.0
 googlemaps==4.10.0
+supabase==2.13.0
